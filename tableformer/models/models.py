@@ -33,143 +33,89 @@ class FeatureExtractor(nn.Module):
         out = out.permute(0, 2, 3, 1)  # (batch_size, encoded_image_size, encoded_image_size, 2048)
         return out
 
-class Encoder(nn.Module):
-    """
-    Encoder.
-    """
-
-    def __init__(self, attention_dim, embed_dim, decoder_dim, vocab_size, encoder_dim=2048, dropout=0.5):
-        super(Encoder, self).__init__()
-        encoder_layer = nn.TransformerEncoderLayer(d_model=512, nhead=8)
-        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=2)
-
-    def forward(self, encoder_out, encoded_captions, caption_lengths):
-        return None
-
-
-class Decoder(nn.Module):
-    """
-    Decoder.
-    """
-
-    def __init__(self, attention_dim, embed_dim, decoder_dim, vocab_size, encoder_dim=2048, dropout=0.5):
-        super(Decoder, self).__init__()
-
-        self.encoder_dim = encoder_dim
-        self.attention_dim = attention_dim
-        self.embed_dim = embed_dim
-        self.decoder_dim = decoder_dim
-        self.vocab_size = vocab_size
-        self.dropout = dropout
-
-        self.attention = Attention(encoder_dim, decoder_dim, attention_dim)  # attention network
-        decoder_layer = nn.TransformerDecoderLayer(d_model=512, nhead=8)
-        self.decoder = nn.TransformerDecoder(decoder_layer, num_layers=4)
-
-    def forward(self, encoder_out, encoded_captions, caption_lengths):
-        """
-        Forward propagation.
-        :param encoder_out: encoded images, a tensor of dimension (batch_size, enc_image_size, enc_image_size, encoder_dim)
-        :param encoded_captions: encoded captions, a tensor of dimension (batch_size, max_caption_length)
-        :param caption_lengths: caption lengths, a tensor of dimension (batch_size, 1)
-        :return: scores for vocabulary, sorted encoded captions, decode lengths, weights, sort indices
-        """
-
-        batch_size = encoder_out.size(0)
-        encoder_dim = encoder_out.size(-1)
-        vocab_size = self.vocab_size
-
-        # Flatten image
-        encoder_out = encoder_out.view(batch_size, -1, encoder_dim)  # (batch_size, num_pixels, encoder_dim)
-        num_pixels = encoder_out.size(1)
-
-        # Sort input data by decreasing lengths; why? apparent below
-        caption_lengths, sort_ind = caption_lengths.squeeze(1).sort(dim=0, descending=True)
-        encoder_out = encoder_out[sort_ind]
-        encoded_captions = encoded_captions[sort_ind]
-
-        # Embedding
-        embeddings = self.embedding(encoded_captions)  # (batch_size, max_caption_length, embed_dim)
-
-        # Initialize LSTM state
-        h, c = self.init_hidden_state(encoder_out)  # (batch_size, decoder_dim)
-
-        # We won't decode at the <end> position, since we've finished generating as soon as we generate <end>
-        # So, decoding lengths are actual lengths - 1
-        decode_lengths = (caption_lengths - 1).tolist()
-
-        # Create tensors to hold word predicion scores and alphas
-        predictions = torch.zeros(batch_size, max(decode_lengths), vocab_size).to(device)
-        alphas = torch.zeros(batch_size, max(decode_lengths), num_pixels).to(device)
-
-        # At each time-step, decode by
-        # attention-weighing the encoder's output based on the decoder's previous hidden state output
-        # then generate a new word in the decoder with the previous word and the attention weighted encoding
-        for t in range(max(decode_lengths)):
-            batch_size_t = sum([l > t for l in decode_lengths])
-            attention_weighted_encoding, alpha = self.attention(encoder_out[:batch_size_t],
-                                                                h[:batch_size_t])
-            gate = self.sigmoid(self.f_beta(h[:batch_size_t]))  # gating scalar, (batch_size_t, encoder_dim)
-            attention_weighted_encoding = gate * attention_weighted_encoding
-            h, c = self.decode_step(
-                torch.cat([embeddings[:batch_size_t, t, :], attention_weighted_encoding], dim=1),
-                (h[:batch_size_t], c[:batch_size_t]))  # (batch_size_t, decoder_dim)
-            preds = self.fc(self.dropout(h))  # (batch_size_t, vocab_size)
-            predictions[:batch_size_t, t, :] = preds
-            alphas[:batch_size_t, t, :] = alpha
-
-        return predictions, encoded_captions, decode_lengths, alphas, sort_ind
-
-class Attention(nn.Module):
-    """
-    Attention Network.
-    """
-    def __init__(self, encoder_dim, decoder_dim, attention_dim):
-        super(Attention, self).__init__()
-        self.encoder_att = nn.Linear(encoder_dim, attention_dim)  # linear layer to transform encoded image
-        self.decoder_att = nn.Linear(decoder_dim, attention_dim)  # linear layer to transform decoder's output
-        self.full_att = nn.Linear(attention_dim, 1)  # linear layer to calculate values to be softmax-ed
-        self.relu = nn.ReLU()
-        self.softmax = nn.Softmax(dim=1)  # softmax layer to calculate weights
-
-    def forward(self, encoder_out, decoder_hidden):
-        att1 = self.encoder_att(encoder_out)  # (batch_size, num_pixels, attention_dim)
-        att2 = self.decoder_att(decoder_hidden)  # (batch_size, attention_dim)
-        att = self.full_att(self.relu(att1 + att2.unsqueeze(1))).squeeze(2)  # (batch_size, num_pixels)
-        alpha = self.softmax(att)  # (batch_size, num_pixels)
-        attention_weighted_encoding = (encoder_out * alpha.unsqueeze(2)).sum(dim=1)  # (batch_size, encoder_dim)
-
-        return attention_weighted_encoding, alpha
-    
-class CellBboxDecoder(nn.Module):
-    def __init__(self):
+class MLP(nn.Module):
+    def __init__(self, num_layers=3):
         super().__init__()
-        l_1 = nn.Linear()
-        att = Attention()
-        l_1 = nn.Linear()
-        sigmoid = nn.Sigmoid()
-
-    def forward(self, x_1, x_2):
-        """
-        x_1 : output of encoder
-        x_2 : output(add&norm) of decoder
-        """
-        return None
-
+        op_list = []
+        for _ in range(num_layers):
+            op_list.append(nn.Linear(4))
+            op_list.append(nn.ReLU())
+        self.mlp = nn.Sequential(*op_list)
+    def forward(self):
+        return self.mlp
 
 class TableFormer(nn.Module):
     def __init__(self):
         super().__init__()
         self.feature_extractor = FeatureExtractor()
         self.embedding = Embedding()
-        self.encoder = Encoder()
-        self.decoder = Decoder()
-        self.cell_decoder = CellBboxDecoder()
+        
+        encoder_layer = nn.TransformerEncoderLayer(d_model=512, nhead=4, dim_feedforward=1024)
+        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=2)
 
-    def forward(self, x, y):
-        x_f = self.feature_extractor(x)
-        x_e = self.encoder(self.pe(x_f))
-        tags, z = self.decoder(self.pe(y), x_e)
-        boxes = self.cell_decoder(x, z)
-        return tags, boxes
+        decoder_layer = nn.TransformerDecoderLayer(d_model=512, nhead=4, dim_feedforward=1024)
+        self.decoder = nn.TransformerDecoder(decoder_layer, num_layers=4)
 
+        self.attention = nn.MultiheadAttention(embed_dim=embed_dim, num_heads=1, dropout=0.5)
+        # attn_output, attn_output_weights = self.attention(query, key, value)
+
+        self.linear = nn.Linear(in_features=1, out_features=1)
+        self.softmax = nn.Softmax(dim=4)
+
+        self.mlp = MLP(num_layers=3)
+        self.cls = nn.Linear(in_features=1, out_features=2)
+
+        self.src_pe = PositionalEncoder()
+        self.target_pe = PositionalEncoder()
+
+    def forward(self, img, y_tags, y_bboxes):
+        x_f = self.feature_extractor(img)
+        enc_out = self.encoder(self.src_pe(x_f))
+
+        ys = torch.zeros(ys_size, dtype=torch.long, device=img.device)
+        ys[0, :] = 1
+
+        if y_tags in None: # predict greedy
+            for i in range(self.max_len + 1):
+                out = self.decoder(self.target_pe(self.target_embed(ys[:i+1])), x_e, mask)
+
+                probs[:, i, :] = self.generator(out[-1])
+                _, ys[i+1, :] = torch.max(probs[:, i, :], dim=-1)
+                return
+        else:
+            dec_out = self.decoder(tgt=y_tags, memory=enc_out, tgt_mask=None, memory_mask=None)
+            pred_tags = self.softmax(self.linear(dec_out))
+            attn_out, attn_outpuot_weights = self.attention(out, out, enc_out)
+            pred_boxes, pred_clses = self.mlp(attn_out), self.cls(attn_out)
+            return enc_out, pred_tags, pred_boxes, pred_clses
+
+def _greedy_decode(self, enc_input):
+    batch_size = enc_input.size(1)
+    pred_size = (batch_size, self.batch_max_length+1, self.num_classes)
+    ys_size = (self.batch_max_length+2, batch_size)
+    
+    memory = self.model.encoder(self.src_pe(enc_input))
+    ys = torch.zeros(ys_size, dtype=torch.long, device=enc_input.device)
+    # TODO: Fix Dynamic BOS Token Index
+    ys[0, :] = 1
+    probs = torch.zeros(
+        pred_size, dtype=torch.float, device=enc_input.device)
+    target_mask = self.target_mask.to(enc_input.device)
+
+    for i in range(self.batch_max_length+1):
+        out = self.model.decoder(
+            self.target_pe(self.taraget_embed(ys[:i+1])),
+            memory,
+            target_mask[:i+1, :i+1]
+        )
+
+        probs[:, i, :] = self.generator(out[-1])
+        _, ys[i+1, :] = torch.max(probs[:, i, :], dim=-1)
+    
+    return probs
+
+def _generate_subsequent_mask(self, sz):
+    mask = (torch.triu(torch.ones(sz, sz)) == 1).transpose(0, 1)
+    mask = mask.float().masked_fill(
+        mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
+    return mask
