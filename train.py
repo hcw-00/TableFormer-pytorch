@@ -1,19 +1,23 @@
-from torch.utils.data import Dataset, DataLoader
+import argparse
 import torch
 import pytorch_lightning as pl
-from PIL import Image
-import numpy as np
-import argparse
-import shutil
-import glob
-import os
+from torch import optim
+import torch.nn.functional as F
+import torch.nn as nn
 
-from PIL import Image
+from torchvision.ops import generalized_box_iou_loss
 from tableformer.models.models import TableFormer
+from tableformer.datas.datas import DataModule
+from tableformer.datas.utils import PREDEFINED_SET
 
-class TableFormerLightning(pl.LightningModule):
-    def __init__(self):
+class TableFormerLit(pl.LightningModule):
+    def __init__(self, args):
         super().__init__()
+        self.lr = args.lr
+        self.model = TableFormer()
+        self.batch_size = args.batch_size
+        self.l1_loss = nn.L1Loss()
+        self.vocab_size = len(PREDEFINED_SET)
 
     def forward(self, x):
         """inference onlys"""
@@ -21,66 +25,61 @@ class TableFormerLightning(pl.LightningModule):
         return None    
 
     def configure_optimizers(self):
-        # 3 x Adam optimizer each for,
-        # CNN backbone network
-        # structure decoder
-        # cell bbox decoder
+        opt1 = optim.Adam(self.model.parameters(), lr=self.lr)
+        # lr_schedulers = {"scheduler": ReduceLROnPlateau(opt1, ...), "monitor": "metric_to_track"}
+        return opt1, #optimizers, None
 
-        # parameter setup (=> PubTabNet)
-        # 1st stage. lr 0.001 for 12 epoch with batch size 24, and lambda 0.5
-        # 2nd stage. lr 0.0001 for 12 epoch with batch size 18.
-        opt1 = Adam(...)
-        opt2 = Adam(...)
-        opt3 = Adam(...)
-        optimizers = [opt1, opt2, opt3]
-        lr_schedulers = {"scheduler": ReduceLROnPlateau(opt1, ...), "monitor": "metric_to_track"}
-        return optimizers, lr_schedulers
-        
     def training_step(self, batch, batch_idx): 
-        x, y, z = batch
-        enc_out, pred_tags, pred_boxes, pred_clses = self.model(x, y)
-        loss = 'loss'
-        metrics = {}
-        metrics["train_loss"] = loss.tolist()
-        if self.global_step % self.trainer.log_every_n_steps == 0 and self.logger:
-            self.logger.log_metrics(metrics)
-        pass
+        opt = self.optimizers()
+        image, tags, boxes, classes = batch
+        enc_out, pred_tags, pred_boxes, pred_clses = self.model(image, tags, boxes, classes)
+        # structure decode loss : cross-entropy
+        l_s = F.cross_entropy(pred_tags.permute(1,2,0), tags[:,1:]) # (b, vocab-1) : vocab : len([<start>,<end>,...])
+        # bbox loss
+        # import pdb;pdb.set_trace()
+        l_iou = generalized_box_iou_loss(pred_boxes.permute(1,0,2), boxes, reduction='mean') # TODO match size of pred and gt
+        l_l1 = self.l1_loss(pred_boxes.permute(1,0,2), boxes)
+        l_box = 0.5 * l_iou + 0.5 * l_l1
+        # total loss
+        loss = 0.5*l_s + 0.5*l_box
+        return loss
 
     def validation_step(self, batch, batch_idx):
         x, y, z = batch
-        enc_out, pred_tags, pred_boxes, pred_clses = self.model(x, y)
-        loss = 'loss'
-        try:
-            eval_result = self.evaluator.evaluate(y, preds, verbose= batch_idx == 0)
-            return { **eval_result , "loss": loss}
-        except Exception as e:
-            print(e)
-            return { "correct": 0, "cer": 0, "length": 0 , "loss": loss}
+        pass
 
 def get_args():
     parser = argparse.ArgumentParser(description='TableFormer')
     parser.add_argument('--phase', choices=['train','test'], default='train')
-    parser.add_argument('--dataset_path', default='')
-    parser.add_argument('--num_epochs', default=1)
-    parser.add_argument('--batch_size', default=32)
-    parser.add_argument('--input_size', default=224)
+    parser.add_argument('--img_path', default='/home/changwoo/Datasets/SynthTabNet/sparse_small/images')
+    parser.add_argument('--gt_path', default='/home/changwoo/Datasets/SynthTabNet/sparse_small/synthetic_data.jsonl')
+    parser.add_argument('--num_epochs', default=5)
+    parser.add_argument('--batch_size', default=1)
+    parser.add_argument('--input_size', default=448)
+    parser.add_argument('--num_workers', default=2)
+    parser.add_argument('--lr', default=0.0001)
     args = parser.parse_args()
     return args
 
 if __name__ == '__main__':
     args = get_args()
-
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
-    train_loader = DataLoader(MNIST(os.getcwd(), download=True, transform=transforms.ToTensor()))
-    trainer = pl.Trainer.from_argparse_args(args, \
-        default_root_dir=os.path.join(args.project_root_path, args.category), \
-        max_epochs=args.num_epochs, gpus=1) #, check_val_every_n_epoch=args.val_freq,  num_sanity_val_steps=0) # ,fast_dev_run=True)
+    dm = DataModule(args)
+    model = TableFormerLit(args)
+
+    trainer = pl.Trainer.from_argparse_args(
+        args,
+        max_epochs=args.num_epochs, 
+        gpus=1
+        ) 
+        # default_root_dir=os.path.join(args.project_root_path, args.category), 
+        #, check_val_every_n_epoch=args.val_freq,  num_sanity_val_steps=0) # ,fast_dev_run=True)
     
-    model = TableFormer(hparams=args)
-    
-    if args.phase == 'train':
-        trainer.fit(model)
-        trainer.test(model)
-    elif args.phase == 'test':
-        trainer.test(model)
+    trainer.fit(model, dm)
+
+    # if args.phase == 'train':
+    #     trainer.fit(model)
+    #     trainer.test(model)
+    # elif args.phase == 'test':
+    #     trainer.test(model)
