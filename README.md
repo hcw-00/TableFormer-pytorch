@@ -1,5 +1,13 @@
 # TableFormer-pytorch
 Unofficial implementation of tableformer  
-original paper  
-TableFormer: Table Structure Understanding with Transformers [link](https://arxiv.org/abs/2203.01017)  
-Ahmed Nassar, Nikolaos Livathinos, Maksym Lysak, Peter Staar
+__original paper__  
+_TableFormer: Table Structure Understanding with Transformers (2022) [arxiv](https://arxiv.org/abs/2203.01017)_  
+_Ahmed Nassar, Nikolaos Livathinos, Maksym Lysak, Peter Staar_
+
+__TODO List__
+-
+- [X] Modeling
+- [X] Training
+- [ ] Batch training
+- [ ] Validation
+- [ ] Evaluation
