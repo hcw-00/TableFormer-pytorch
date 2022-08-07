@@ -51,8 +51,8 @@ class TableFormerLit(pl.LightningModule):
 def get_args():
     parser = argparse.ArgumentParser(description='TableFormer')
     parser.add_argument('--phase', choices=['train','test'], default='train')
-    parser.add_argument('--img_path', default='/home/changwoo/Datasets/SynthTabNet/sparse_small/images')
-    parser.add_argument('--gt_path', default='/home/changwoo/Datasets/SynthTabNet/sparse_small/synthetic_data.jsonl')
+    parser.add_argument('--img_path', required=True)
+    parser.add_argument('--gt_path', required=True)
     parser.add_argument('--num_epochs', default=5)
     parser.add_argument('--batch_size', default=1)
     parser.add_argument('--input_size', default=448)
